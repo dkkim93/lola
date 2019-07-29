@@ -1,5 +1,5 @@
 click
-gym
+gym[atari]==0.10.5
 mock
 numpy>=1.11
 dm-sonnet>=1.20
