@@ -30,4 +30,5 @@ print_header "Training network"
 cd $DIR
 
 # Begin experiment
-python3.6 scripts/run_lola.py
+python3.6 scripts/run_lola.py \
+--no-exact
