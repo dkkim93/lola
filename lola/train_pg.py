@@ -9,154 +9,117 @@ from .networks import *
 from .utils import *
 
 
-def update(mainQN, lr, final_delta_1_v, final_delta_2_v):
+SUMMARYLENGTH = 10  # Number of episodes to periodically save for analysis
+
+
+def update_policy(mainQN, lr, final_delta_1_v, final_delta_2_v):
     mainQN[0].setparams(mainQN[0].getparams() + lr * np.squeeze(final_delta_1_v))
     mainQN[1].setparams(mainQN[1].getparams() + lr * np.squeeze(final_delta_2_v))
 
 
+def log_performance(gamma_discount, reward_list, i_episode):
+    log_items = {}
+    log_items['i_episode'] = i_episode
+    log_items['reward_agent0'] = np.mean(reward_list[-SUMMARYLENGTH:], 0)[0] / gamma_discount
+    log_items['reward_agent1'] = np.mean(reward_list[-SUMMARYLENGTH:], 0)[1] / gamma_discount
+
+    for key in sorted(log_items.keys()):
+        logger.record_tabular(key, log_items[key])
+    logger.dump_tabular()
+    logger.info('')
+
+
+def collect_one_trajectory(env, mainQN, gamma, trace_length, sess):
+    episodeBuffer = [[] for _ in range(env.NUM_AGENTS)]
+    rewards_episode = np.zeros((env.NUM_AGENTS))
+    state = env.reset()
+    timestep = 0
+
+    while timestep < trace_length + 1:
+        timestep += 1
+
+        # Get action
+        actions = []
+        for i_agent in range(env.NUM_AGENTS):
+            a = sess.run(
+                [mainQN[i_agent].predict],
+                feed_dict={mainQN[i_agent].scalarInput: [state[i_agent]]})
+            actions.append(a[0])
+
+        # Take step in the environment
+        next_state, rewards, done = env.step(actions)
+
+        # Add to experience
+        for i_agent in range(env.NUM_AGENTS):
+            episodeBuffer[i_agent].append([
+                state[0], actions[i_agent], rewards[i_agent], 
+                next_state[0], done, i_agent])
+
+        # For next timestep
+        state = next_state
+
+        rewards_episode += [rewards[i_agent] * gamma**(timestep - 1) for i_agent in range(2)]
+
+        if done:
+            break
+
+    return episodeBuffer, rewards_episode
+
+
 def train(env, *, num_episodes, trace_length, batch_size, gamma,
-          set_zero, lr, corrections, simple_net, hidden,
-          mem_efficient=True):
-    y = gamma
-    n_agents = env.NUM_AGENTS
-    total_n_agents = n_agents
-    max_epLength = trace_length + 1  # The max allowed length of our episode.
-    summaryLength = 20  # Number of epidoes to periodically save for analysis
-
+          lr, corrections, simple_net, hidden):
     tf.reset_default_graph()
-    mainQN = []
 
-    agent_list = np.arange(total_n_agents)
-    for agent in range(total_n_agents):
+    # Q-networks
+    mainQN = []
+    for i_agent in range(env.NUM_AGENTS):
         mainQN.append(Qnetwork(
-            'main' + str(agent), agent, env, lr=lr, 
+            'main' + str(i_agent), 
+            i_agent, env, lr=lr, 
             gamma=gamma, batch_size=batch_size, trace_length=trace_length, 
             hidden=hidden, simple_net=simple_net))
 
-    if not mem_efficient:
-        cube, cube_ops = make_cube(trace_length)
-    else:
-        cube, cube_ops = None, None
+    # Corrections
+    corrections_func(
+        mainQN,
+        batch_size=batch_size, trace_length=trace_length,
+        corrections=corrections, cube=None)
 
-    corrections_func(mainQN,
-                     batch_size=batch_size,
-                     trace_length=trace_length,
-                     corrections=corrections,
-                     cube=cube)
+    # Initialize buffer
+    buffers = [ExperienceBuffer(batch_size) for _ in range(env.NUM_AGENTS)]
 
-    init = tf.global_variables_initializer()
-
-    buffers = []
-    for i in range(total_n_agents):
-        buffers.append(ExperienceBuffer(batch_size))
-
-    # Create lists to contain total rewards and steps per episode
-    jList = []
-    rList = []
-    aList = []
-
-    total_steps = 0
-
-    episodes_run = np.zeros(total_n_agents)
-    episodes_run_counter = np.zeros(total_n_agents)
-    episodes_reward = np.zeros(total_n_agents)
-    episodes_actions = np.zeros((total_n_agents, env.NUM_ACTIONS))  # Need to multiple with
+    # Misc
     pow_series = np.arange(trace_length)
-    discount = np.array([pow(gamma, item) for item in pow_series])
-    discount_array = gamma**trace_length / discount
-    # print('discount_array',discount_array.shape)
-    discount = np.expand_dims(discount, 0)
-    discount_array = np.reshape(discount_array, [1, -1])
+    discount = np.expand_dims(np.array([pow(gamma, item) for item in pow_series]), 0)
+    discount_array = np.reshape(gamma**trace_length / discount[0, :], [1, -1])
+    gamma_discount = 1. / (1. - gamma)
+    reward_list = []
 
-    array = np.eye(env.NUM_STATES)
-    feed_dict_log_pi = {
-        mainQN[0].scalarInput: array,
-        mainQN[1].scalarInput: array}
+    # Start training
+    init = tf.global_variables_initializer()
 
     with tf.Session() as sess:
         sess.run(init)
-        if cube_ops is not None:
-            sess.run(cube_ops)
 
-        if set_zero == 1:
-            for i in range(2):
-                mainQN[i].setparams(np.zeros((5)))
-                theta_2_vals = mainQN[i].getparams()
-
-        sP = env.reset()
-        updated = True
-        for i in range(num_episodes):
-            episodeBuffer = []
-            for ii in range(n_agents):
-                episodeBuffer.append([])
-            np.random.shuffle(agent_list)
-            if n_agents == total_n_agents:
-                these_agents = range(n_agents)
-            else:
-                these_agents = sorted(agent_list[0:n_agents])
-
-            # Reset environment and get first new observation
-            sP = env.reset()
-            s = sP
-
-            d = False
-            rAll = np.zeros((n_agents))
-            aAll = np.zeros((env.NUM_STATES))
-            j = 0
-
-            for agent in these_agents:
-                episodes_run[agent] += 1
-                episodes_run_counter[agent] += 1
-
-            # The Q-Network
-            while j < max_epLength:
-                j += 1
-                a_all = []
-                for agent_role, agent in enumerate(these_agents):
-                    a = sess.run(
-                        [mainQN[agent].predict],
-                        feed_dict={
-                            mainQN[agent].scalarInput: [s[agent_role]]
-                        }
-                    )
-                    a_all.append(a[0])
-
-                s1P, r, d = env.step(a_all)
-                s1 = s1P
-
-                total_steps += 1
-                for agent_role, agent in enumerate(these_agents):
-                    episodeBuffer[agent_role].append([
-                        s[0], a_all[agent_role], r[agent_role], s1[0],
-                        d, these_agents[agent_role]
-                    ])
-                    episodes_reward[agent] += r[agent_role]
-                rAll += [r[ii] * gamma**(j - 1) for ii in range(2)]
-
-                aAll[a_all[0]] += 1
-                aAll[a_all[1] + 2] += 1
-                s = s1
-                sP = s1P
-                if d is True:
-                    break
+        for i_episode in range(num_episodes):
+            # Collect one trajectory experience
+            episodeBuffer, rewards_episode = collect_one_trajectory(
+                env, mainQN, gamma, trace_length, sess)
 
             # Add the episode to the experience buffer
-            for agent_role, agent in enumerate(these_agents):
-                buffers[agent].add(np.array(episodeBuffer[agent_role]))
+            for i_agent in range(env.NUM_AGENTS):
+                buffers[i_agent].add(np.array(episodeBuffer[i_agent]))
+            reward_list.append(rewards_episode)
 
-            jList.append(j)
-            rList.append(rAll)
-            aList.append(aAll)
-
-            if (episodes_run[agent] % batch_size == 0 and
-                episodes_run[agent] > 0):
-                trainBatch0 = buffers[0].sample(batch_size, trace_length)  # Get a random batch of experiences.
+            if (i_episode + 1) % batch_size == 0:
+                # Update policy
+                trainBatch0 = buffers[0].sample(batch_size, trace_length)
                 trainBatch1 = buffers[1].sample(batch_size, trace_length)
 
                 sample_return0 = np.reshape(
-                    get_monte_carlo(trainBatch0[:, 2], y, trace_length, batch_size), [batch_size, -1])
+                    get_monte_carlo(trainBatch0[:, 2], gamma, trace_length, batch_size), [batch_size, -1])
                 sample_return1 = np.reshape(
-                    get_monte_carlo(trainBatch1[:, 2], y, trace_length, batch_size), [batch_size, -1])
+                    get_monte_carlo(trainBatch1[:, 2], gamma, trace_length, batch_size), [batch_size, -1])
 
                 sample_reward0 = np.reshape(trainBatch0[:, 2] - np.mean(trainBatch0[:, 2]), [-1, trace_length]) * discount
                 sample_reward1 = np.reshape(trainBatch1[:, 2] - np.mean(trainBatch1[:, 2]), [-1, trace_length]) * discount
@@ -167,10 +130,7 @@ def train(env, *, num_episodes, trace_length, batch_size, gamma,
                     [mainQN[0].value, mainQN[1].value],
                     feed_dict={
                         mainQN[0].scalarInput: last_state,
-                        mainQN[1].scalarInput: last_state,
-                    }
-                )
-
+                        mainQN[1].scalarInput: last_state})
                 fetches = [
                     mainQN[0].values,
                     mainQN[0].updateModel,
@@ -179,8 +139,7 @@ def train(env, *, num_episodes, trace_length, batch_size, gamma,
                     mainQN[0].grad,
                     mainQN[1].grad,
                     mainQN[0].v_0_grad_01,
-                    mainQN[1].v_1_grad_10
-                ]
+                    mainQN[1].v_1_grad_10]
                 feed_dict = {
                     mainQN[0].scalarInput: np.vstack(trainBatch0[:, 0]),
                     mainQN[0].sample_return: sample_return0,
@@ -195,75 +154,11 @@ def train(env, *, num_episodes, trace_length, batch_size, gamma,
                     mainQN[0].gamma_array: discount,
                     mainQN[1].gamma_array: discount,
                     mainQN[0].gamma_array_inverse: discount_array,
-                    mainQN[1].gamma_array_inverse: discount_array,
-                }
-                if episodes_run[agent] % batch_size == 0 and episodes_run[agent] > 0:
-                    values, _, _, update1, update2, grad_1, grad_2, v0_grad_01, v1_grad_10 = \
-                        sess.run(fetches, feed_dict=feed_dict)
+                    mainQN[1].gamma_array_inverse: discount_array}
 
-                if episodes_run[agent] % batch_size == 0 and episodes_run[agent] > 0:
-                    update(mainQN, lr, update1, update2)
-                    updated = True
-                    print('update params')
-                    print('grad_1', grad_1)
-                    print('grad_2', grad_2)
-                    print('v0_grad_01', v0_grad_01)
-                    print('v1_grad_10', v1_grad_10)
-                    print('values', values)
-                episodes_run_counter[agent] = episodes_run_counter[agent] * 0
-                episodes_actions[agent] = episodes_actions[agent] * 0
-                episodes_reward[agent] = episodes_reward[agent] * 0
+                values, _, _, update1, update2, grad_1, grad_2, v0_grad_01, v1_grad_10 = \
+                    sess.run(fetches, feed_dict=feed_dict)
+                update_policy(mainQN, lr, update1, update2)
 
-            if len(rList) % summaryLength == 0 and len(rList) != 0 and updated is True:
-                updated = False
-                gamma_discount = 1. / (1. - gamma)
-                print(
-                    total_steps, 
-                    'reward', np.mean(rList[-summaryLength:], 0) / gamma_discount, 
-                    'action', (np.mean(aList[-summaryLength:], 0) * 2. / np.sum(np.mean(aList[-summaryLength:], 0))) * 100 // 1)
-
-                action_prob = np.mean(aList[-summaryLength:], 0) * 2. / np.sum(np.mean(aList[-summaryLength:], 0))
-                log_items = {}
-                log_items['reward_agent0'] = np.mean(rList[-summaryLength:], 0)[0]
-                log_items['reward_agent1'] = np.mean(rList[-summaryLength:], 0)[1]
-                log_items['agent0_C'] = action_prob[0]
-                log_items['agent0_D'] = action_prob[1]
-                log_items['agent1_C'] = action_prob[2]
-                log_items['agent1_D'] = action_prob[3]
-                if simple_net:
-                    theta_1_vals = mainQN[0].getparams()
-                    theta_2_vals = mainQN[1].getparams()
-                    print('theta_1_vals', theta_1_vals)
-                    print('theta_2_vals', theta_2_vals)
-
-                    log_items['theta_1_0'] = theta_1_vals[0]
-                    log_items['theta_1_1'] = theta_1_vals[1]
-                    log_items['theta_1_2'] = theta_1_vals[2]
-                    log_items['theta_1_3'] = theta_1_vals[3]
-                    log_items['theta_1_4'] = theta_1_vals[4]
-                    log_items['theta_2_0'] = theta_2_vals[0]
-                    log_items['theta_2_1'] = theta_2_vals[1]
-                    log_items['theta_2_2'] = theta_2_vals[2]
-                    log_items['theta_2_3'] = theta_2_vals[3]
-                    log_items['theta_2_4'] = theta_2_vals[4]
-                else:
-                    log_pi0, log_pi1 = sess.run([mainQN[0].log_pi, mainQN[1].log_pi], feed_dict=feed_dict_log_pi)
-                    print('pi 0', np.exp(log_pi0))
-                    print('pi 1', np.exp(log_pi1))
-
-                    log_items['pi_1_0'] = np.exp(log_pi0[0][0])
-                    log_items['pi_1_1'] = np.exp(log_pi0[1][0])
-                    log_items['pi_1_2'] = np.exp(log_pi0[2][0])
-                    log_items['pi_1_3'] = np.exp(log_pi0[3][0])
-                    log_items['pi_1_4'] = np.exp(log_pi0[4][0])
-
-                    log_items['pi_2_0'] = np.exp(log_pi1[0][0])
-                    log_items['pi_2_1'] = np.exp(log_pi1[1][0])
-                    log_items['pi_2_2'] = np.exp(log_pi1[2][0])
-                    log_items['pi_2_3'] = np.exp(log_pi1[3][0])
-                    log_items['pi_2_4'] = np.exp(log_pi1[4][0])
-
-                for key in sorted(log_items.keys()):
-                    logger.record_tabular(key, log_items[key])
-                logger.dump_tabular()
-                logger.info('')
+                # Log performance
+                log_performance(gamma_discount, reward_list, i_episode)

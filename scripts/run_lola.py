@@ -104,9 +104,8 @@ def main(exp_name, num_episodes, trace_length, exact, pseudo, grid_size,
             train(
                 env, num_episodes=num_episodes,
                 trace_length=trace_length, batch_size=batch_size,
-                gamma=gamma, set_zero=0, lr=lr, corrections=lola,
-                simple_net=simple_net, hidden=hidden,
-                mem_efficient=mem_efficient)
+                gamma=gamma, lr=lr, corrections=lola,
+                simple_net=simple_net, hidden=hidden)
     elif exp_name == "CoinGame":
         def run(env):
             from lola.train_cg import train
