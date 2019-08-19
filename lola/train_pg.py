@@ -12,15 +12,20 @@ SUMMARYLENGTH = 10  # Number of episodes to periodically save for analysis
 
 
 def update_policy(mainQN, lr, final_delta_1_v, final_delta_2_v):
+    mainQN[0].prev_params = mainQN[0].getparams()
+    mainQN[1].prev_params = mainQN[1].getparams()
+
     mainQN[0].setparams(mainQN[0].getparams() + lr * np.squeeze(final_delta_1_v))
     mainQN[1].setparams(mainQN[1].getparams() + lr * np.squeeze(final_delta_2_v))
 
 
-def log_performance(gamma_discount, reward_list, i_episode):
+def log_performance(gamma_discount, reward_list, errors, i_episode):
     log_items = {}
     log_items['i_episode'] = i_episode
     log_items['reward_agent0'] = np.mean(reward_list[-SUMMARYLENGTH:], 0)[0] / gamma_discount
     log_items['reward_agent1'] = np.mean(reward_list[-SUMMARYLENGTH:], 0)[1] / gamma_discount
+    log_items['error0'] = errors[0]
+    log_items['error1'] = errors[1]
 
     for key in sorted(log_items.keys()):
         logger.record_tabular(key, log_items[key])
@@ -155,9 +160,15 @@ def train(env, *, num_episodes, trace_length, batch_size, gamma,
                     mainQN[0].gamma_array_inverse: discount_array,
                     mainQN[1].gamma_array_inverse: discount_array}
 
-                values, _, _, update1, update2, grad_1, grad_2, v0_grad_01, v1_grad_10 = \
+                values, _, _, update1, update2, grad0, grad1, v0_grad_01, v1_grad_10 = \
                     sess.run(fetches, feed_dict=feed_dict)
                 update_policy(mainQN, lr, update1, update2)
 
+                # Calculate error
+                error0 = mainQN[1].getparams() - (mainQN[1].prev_params + lr_correction * grad1)
+                error0 = np.abs(np.sum(error0.flatten()))
+                error1 = mainQN[0].getparams() - (mainQN[0].prev_params + lr_correction * grad0)
+                error1 = np.abs(np.sum(error1.flatten()))
+
                 # Log performance
-                log_performance(gamma_discount, reward_list, i_episode + 1)
+                log_performance(gamma_discount, reward_list, [error0, error1], i_episode + 1)

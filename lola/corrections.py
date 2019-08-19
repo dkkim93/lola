@@ -2,14 +2,11 @@
 The magic corrections of LOLA.
 """
 import tensorflow as tf
-
 from .utils import flatgrad
 
 
-def corrections_func(mainPN, batch_size, trace_length,
-                     corrections=False, cube=None):
-    """Computes corrections for policy gradients.
-
+def corrections_func(mainPN, batch_size, trace_length, corrections=False, cube=None):
+    """ Computes corrections for policy gradients.
     Args:
     -----
         mainPN: list of policy/Q-networks
@@ -26,12 +23,15 @@ def corrections_func(mainPN, batch_size, trace_length,
             is a little longer to compile, but has lower memory footprint.
     """
     if cube is not None:
-        ac_logp0 = tf.reshape(mainPN[0].log_pi_action_bs_t,
-                              [batch_size, 1, trace_length])
-        ac_logp1 = tf.reshape(mainPN[1].log_pi_action_bs_t,
-                              [batch_size, trace_length, 1])
-        mat_1 = tf.reshape(tf.squeeze(tf.matmul(ac_logp1, ac_logp0)),
-                           [batch_size, 1, trace_length * trace_length])
+        ac_logp0 = tf.reshape(
+            mainPN[0].log_pi_action_bs_t,
+            [batch_size, 1, trace_length])
+        ac_logp1 = tf.reshape(
+            mainPN[1].log_pi_action_bs_t,
+            [batch_size, trace_length, 1])
+        mat_1 = tf.reshape(
+            tf.squeeze(tf.matmul(ac_logp1, ac_logp0)),
+            [batch_size, 1, trace_length * trace_length])
 
         v_0 = tf.matmul(tf.reshape(mainPN[0].sample_reward, [batch_size, trace_length, 1]), mat_1)
         v_0 = tf.reshape(v_0, [batch_size, trace_length, trace_length, trace_length])
@@ -42,10 +42,8 @@ def corrections_func(mainPN, batch_size, trace_length,
         v_0 = 2 * tf.reduce_sum(v_0 * cube) / batch_size
         v_1 = 2 * tf.reduce_sum(v_1 * cube) / batch_size
     else:
-        ac_logp0 = tf.reshape(mainPN[0].log_pi_action_bs_t,
-                              [batch_size, trace_length])
-        ac_logp1 = tf.reshape(mainPN[1].log_pi_action_bs_t,
-                              [batch_size, trace_length])
+        ac_logp0 = tf.reshape(mainPN[0].log_pi_action_bs_t, [batch_size, trace_length])
+        ac_logp1 = tf.reshape(mainPN[1].log_pi_action_bs_t, [batch_size, trace_length])
 
         # Static exclusive cumsum
         ac_logp0_cumsum = [tf.constant(0.)]
@@ -67,11 +65,11 @@ def corrections_func(mainPN, batch_size, trace_length,
         v_0 = 2 * tf.reduce_sum(v_0) / batch_size
         v_1 = 2 * tf.reduce_sum(v_1) / batch_size
 
-    v_0_pi_0 = 2*tf.reduce_sum(((mainPN[0].target-tf.stop_gradient(mainPN[0].value)) * mainPN[0].gamma_array) * mainPN[0].log_pi_action_bs_t) / batch_size
-    v_0_pi_1 = 2*tf.reduce_sum(((mainPN[0].target-tf.stop_gradient(mainPN[0].value)) * mainPN[1].gamma_array) * mainPN[1].log_pi_action_bs_t) / batch_size
+    v_0_pi_0 = 2 * tf.reduce_sum(((mainPN[0].target - tf.stop_gradient(mainPN[0].value)) * mainPN[0].gamma_array) * mainPN[0].log_pi_action_bs_t) / batch_size
+    v_0_pi_1 = 2 * tf.reduce_sum(((mainPN[0].target - tf.stop_gradient(mainPN[0].value)) * mainPN[1].gamma_array) * mainPN[1].log_pi_action_bs_t) / batch_size
 
-    v_1_pi_0 = 2*tf.reduce_sum(((mainPN[1].target-tf.stop_gradient(mainPN[1].value)) * mainPN[0].gamma_array) * mainPN[0].log_pi_action_bs_t) / batch_size
-    v_1_pi_1 = 2*tf.reduce_sum(((mainPN[1].target-tf.stop_gradient(mainPN[1].value)) * mainPN[1].gamma_array) * mainPN[1].log_pi_action_bs_t) / batch_size
+    v_1_pi_0 = 2 * tf.reduce_sum(((mainPN[1].target - tf.stop_gradient(mainPN[1].value)) * mainPN[0].gamma_array) * mainPN[0].log_pi_action_bs_t) / batch_size
+    v_1_pi_1 = 2 * tf.reduce_sum(((mainPN[1].target - tf.stop_gradient(mainPN[1].value)) * mainPN[1].gamma_array) * mainPN[1].log_pi_action_bs_t) / batch_size
 
     v_0_grad_theta_0 = flatgrad(v_0_pi_0, mainPN[0].parameters)
     v_0_grad_theta_1 = flatgrad(v_0_pi_1, mainPN[1].parameters)
@@ -93,12 +91,10 @@ def corrections_func(mainPN, batch_size, trace_length,
 
         multiply0 = tf.matmul(
             tf.reshape(tf.stop_gradient(v_0_grad_theta_1), [1, param_len]),
-            tf.reshape(v_1_grad_theta_1_wrong, [param_len, 1])
-        )
+            tf.reshape(v_1_grad_theta_1_wrong, [param_len, 1]))
         multiply1 = tf.matmul(
             tf.reshape(tf.stop_gradient(v_1_grad_theta_0), [1, param_len]),
-            tf.reshape(v_0_grad_theta_0_wrong, [param_len, 1])
-        )
+            tf.reshape(v_0_grad_theta_0_wrong, [param_len, 1]))
 
         second_order0 = flatgrad(multiply0, mainPN[0].parameters)
         second_order1 = flatgrad(multiply1, mainPN[1].parameters)
@@ -106,8 +102,8 @@ def corrections_func(mainPN, batch_size, trace_length,
         mainPN[0].v_0_grad_01 = second_order0
         mainPN[1].v_1_grad_10 = second_order1
 
-        mainPN[0].delta = v_0_grad_theta_0 + second_order0
-        mainPN[1].delta = v_1_grad_theta_1 + second_order1
+        mainPN[0].delta = v_0_grad_theta_0 + tf.multiply(second_order0, mainPN[0].lr_correction)
+        mainPN[1].delta = v_1_grad_theta_1 + tf.multiply(second_order1, mainPN[1].lr_correction)
     else:
         mainPN[0].delta = v_0_grad_theta_0
         mainPN[1].delta = v_1_grad_theta_1
