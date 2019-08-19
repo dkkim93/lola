@@ -66,7 +66,7 @@ def collect_one_trajectory(env, mainQN, gamma, trace_length, sess):
 
 
 def train(env, *, num_episodes, trace_length, batch_size, gamma,
-          lr, corrections, simple_net, hidden):
+          lr, lr_correction, corrections, simple_net, hidden):
     tf.reset_default_graph()
 
     # Q-networks
@@ -74,7 +74,7 @@ def train(env, *, num_episodes, trace_length, batch_size, gamma,
     for i_agent in range(env.NUM_AGENTS):
         mainQN.append(Qnetwork(
             'main' + str(i_agent), 
-            i_agent, env, lr=lr, 
+            i_agent, env, lr_correction=lr_correction, 
             gamma=gamma, batch_size=batch_size, trace_length=trace_length, 
             hidden=hidden, simple_net=simple_net))
 
@@ -160,4 +160,4 @@ def train(env, *, num_episodes, trace_length, batch_size, gamma,
                 update_policy(mainQN, lr, update1, update2)
 
                 # Log performance
-                log_performance(gamma_discount, reward_list, i_episode)
+                log_performance(gamma_discount, reward_list, i_episode + 1)

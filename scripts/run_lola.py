@@ -104,8 +104,8 @@ def main(exp_name, num_episodes, trace_length, exact, pseudo, grid_size,
             train(
                 env, num_episodes=num_episodes,
                 trace_length=trace_length, batch_size=batch_size,
-                gamma=gamma, lr=lr, corrections=lola,
-                simple_net=simple_net, hidden=hidden)
+                gamma=gamma, lr=lr, lr_correction=lr_correction, 
+                corrections=lola, simple_net=simple_net, hidden=hidden)
     elif exp_name == "CoinGame":
         def run(env):
             from lola.train_cg import train
@@ -131,7 +131,7 @@ def main(exp_name, num_episodes, trace_length, exact, pseudo, grid_size,
     # Run training
     for seed in range(trials):
         logger.reset()
-        logger.configure(dir='logs/{}/seed-{}'.format(exp_name, seed))
+        logger.configure(dir='logs/{}/lr-{}-lr_correction-{}'.format(exp_name, lr, lr_correction))
         run(env)
 
 
