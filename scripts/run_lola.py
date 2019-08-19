@@ -130,6 +130,7 @@ def main(exp_name, num_episodes, trace_length, exact, pseudo, grid_size,
 
     # Run training
     for seed in range(trials):
+        logger.reset()
         logger.configure(dir='logs/{}/seed-{}'.format(exp_name, seed))
         run(env)
 

@@ -136,8 +136,6 @@ def corrections_func(mainQN, corrections, gamma, pseudo, reg):
 def train(env, *, num_episodes=50, trace_length=200,
           simple_net=True, corrections=True, pseudo=False,
           num_hidden=10, reg=0.0, lr=1., lr_correction=0.5, gamma=0.96):
-    logger.reset()
-
     # Get info about the env
     payout_mat_1 = np.reshape(env.payout_mat.T, [-1, 1])
     payout_mat_2 = np.reshape(env.payout_mat, [-1, 1])
