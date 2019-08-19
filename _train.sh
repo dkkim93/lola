@@ -31,4 +31,7 @@ cd $DIR
 
 # Begin experiment
 python3.6 scripts/run_lola.py \
---no-exact
+--no-exact \
+--trials 1 \
+--lr 1 \
+--lr_correctio 1 \
