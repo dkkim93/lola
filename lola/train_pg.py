@@ -8,7 +8,7 @@ from .corrections import *
 from .networks import *
 from .utils import *
 
-
+logger.reset()
 SUMMARYLENGTH = 10  # Number of episodes to periodically save for analysis
 
 
