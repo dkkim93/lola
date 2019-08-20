@@ -34,6 +34,9 @@ class Qnetwork:
 
 
 def update(mainQN, lr, final_delta_1_v, final_delta_2_v):
+    mainQN[0].prev_params = mainQN[0].getparams()
+    mainQN[1].prev_params = mainQN[1].getparams()
+
     mainQN[0].setparams(mainQN[0].getparams() + lr * np.squeeze(final_delta_1_v))
     mainQN[1].setparams(mainQN[1].getparams() + lr * np.squeeze(final_delta_2_v))
 
@@ -127,6 +130,8 @@ def corrections_func(mainQN, corrections, gamma, pseudo, reg):
 
     mainQN[0].v = naive_value0
     mainQN[1].v = naive_value1
+    mainQN[0].grad_naive = grad_naive_value0_wrt_agent0
+    mainQN[1].grad_naive = grad_naive_value1_wrt_agent1
     mainQN[0].delta = grad_naive_value0_wrt_agent0
     mainQN[1].delta = grad_naive_value1_wrt_agent1
     mainQN[0].delta += tf.multiply(second_order0, mainQN[0].lr_correction)
@@ -151,7 +156,6 @@ def train(env, *, num_episodes=50, trace_length=200,
     # Corrections
     corrections_func(mainQN, corrections, gamma, pseudo, reg)
 
-    results = []
     norm = 1. / (1. - gamma)
     init = tf.global_variables_initializer()
     with tf.Session() as sess:
@@ -161,41 +165,36 @@ def train(env, *, num_episodes=50, trace_length=200,
             sess.run(init)
 
             log_items = {}
-            log_items['episode'] = episode + 1
 
-            res, params_time, delta_time = [], [], []
-            for i in range(trace_length):
-                params0 = mainQN[0].getparams()
-                params1 = mainQN[1].getparams()
-                outputs = [mainQN[0].delta, mainQN[1].delta, mainQN[0].v, mainQN[1].v]
+            for timestep in range(trace_length):
+                # Update policy
+                outputs = [
+                    mainQN[0].delta, mainQN[1].delta, mainQN[0].v, mainQN[1].v,
+                    mainQN[0].grad_naive, mainQN[1].grad_naive]
+                feed_dict = {
+                    mainQN[0].reward_func: payout_mat_1,
+                    mainQN[1].reward_func: payout_mat_2,
+                    mainQN[0].lr_correction: lr_coor,
+                    mainQN[1].lr_correction: lr_coor}
 
-                update1, update2, v1, v2 = sess.run(
-                    outputs,
-                    feed_dict={
-                        mainQN[0].reward_func: payout_mat_1,
-                        mainQN[1].reward_func: payout_mat_2,
-                        mainQN[0].lr_correction: lr_coor,
-                        mainQN[1].lr_correction: lr_coor})
-                update(mainQN, lr, update1, update2)
-                params_time.append([params0, params1])
-                delta_time.append([update1, update2])
+                update0, update1, v0, v1, grad_naive0, grad_naive1 = sess.run(outputs, feed_dict=feed_dict)
+                update(mainQN, lr, update0, update1)
 
-                log_items['ret1'] = v1[0][0] / norm
-                log_items['ret2'] = v2[0][0] / norm
-                res.append([v1[0][0] / norm, v2[0][0] / norm])
-            results.append(res)
+                # Compute prediction error
+                pred_error0 = mainQN[1].getparams() - (mainQN[1].prev_params + lr_correction * grad_naive1)
+                pred_error0 = np.abs(np.sum(pred_error0.flatten()))
 
-            for k, v in sorted(log_items.items()):
-                logger.record_tabular(k, v)
-            logger.dump_tabular()
-            logger.info('')
+                pred_error1 = mainQN[0].getparams() - (mainQN[0].prev_params + lr_correction * grad_naive0)
+                pred_error1 = np.abs(np.sum(pred_error1.flatten()))
 
-    result0, result1 = [], []
-    for i_episode in range(num_episodes):
-        result0.append(results[i_episode][-1][0])
-        result1.append(results[i_episode][-1][1])
+                # Logging
+                log_items['timestep'] = str(episode) + "_" + str(timestep)
+                log_items['pred_error0'] = pred_error0
+                log_items['pred_error1'] = pred_error1
+                log_items['return0'] = v0[0][0] / norm
+                log_items['return1'] = v1[0][0] / norm
 
-    print("mean: {:.5f}, std: {:.5f}".format(np.mean(result0), np.std(result0)))
-    print("mean: {:.5f}, std: {:.5f}".format(np.mean(result1), np.std(result1)))
-
-    return results
+                for k, v in sorted(log_items.items()):
+                    logger.record_tabular(k, v)
+                logger.dump_tabular()
+                logger.info('')
